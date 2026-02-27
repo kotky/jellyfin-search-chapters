@@ -5,9 +5,11 @@ using System.Reflection;
 using System.Threading.Tasks;
 using Jellyfin.Data.Enums;
 using MediaBrowser.Controller;
+using MediaBrowser.Controller.Dto;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Library;
 using MediaBrowser.Controller.Plugins;
+using MediaBrowser.Model.Dto;
 using MediaBrowser.Model.Entities;
 using MediaBrowser.Model.Querying;
 using Microsoft.AspNetCore.Http;
@@ -28,18 +30,26 @@ public sealed class ItemsSearchInterceptor : IAsyncActionFilter
     private const double ChapterMinScore = 0.6;
 
     private readonly ILibraryManager _libraryManager;
+    private readonly IUserManager _userManager;
+    private readonly IDtoService _dtoService;
     private readonly ILogger<ItemsSearchInterceptor> _logger;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="ItemsSearchInterceptor"/> class.
     /// </summary>
     /// <param name="libraryManager">The library manager.</param>
+    /// <param name="userManager">The user manager.</param>
+    /// <param name="dtoService">The DTO service.</param>
     /// <param name="logger">The logger.</param>
     public ItemsSearchInterceptor(
         ILibraryManager libraryManager,
+        IUserManager userManager,
+        IDtoService dtoService,
         ILogger<ItemsSearchInterceptor> logger)
     {
         _libraryManager = libraryManager;
+        _userManager = userManager;
+        _dtoService = dtoService;
         _logger = logger;
     }
 
@@ -96,60 +106,58 @@ public sealed class ItemsSearchInterceptor : IAsyncActionFilter
                 return;
             }
 
-            _logger.LogInformation("[SearchChapters] Rewriting /Items query with {Count} ranked item ids", rankedItems.Count);
+            _logger.LogInformation("[SearchChapters] Short-circuiting /Items with {Count} ranked item ids", rankedItems.Count);
 
-            // Rewrite query: remove searchTerm, drop parentId so results are not scoped to one folder,
-            // add recursive=true, and inject ids with ranked item ids.
-            var dict = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
-            foreach (var kvp in query)
+            // Resolve user (required for DTOs and access). Prefer route, then query.
+            var userIdStr = context.RouteData.Values["userId"]?.ToString()
+                ?? query["userId"].ToString();
+            if (string.IsNullOrWhiteSpace(userIdStr) || !Guid.TryParse(userIdStr, out var userId))
             {
-                if (string.Equals(kvp.Key, "searchTerm", StringComparison.OrdinalIgnoreCase)
-                    || string.Equals(kvp.Key, "parentId", StringComparison.OrdinalIgnoreCase))
-                {
-                    continue;
-                }
+                _logger.LogDebug("[SearchChapters] No userId in request, passing through");
+                await next().ConfigureAwait(false);
+                return;
+            }
 
-                if (!dict.TryGetValue(kvp.Key, out var list))
-                {
-                    list = new List<string>();
-                    dict[kvp.Key] = list;
-                }
+            var user = _userManager.GetUserById(userId);
+            if (user is null)
+            {
+                _logger.LogDebug("[SearchChapters] User {UserId} not found, passing through", userId);
+                await next().ConfigureAwait(false);
+                return;
+            }
 
-                foreach (var v in kvp.Value)
+            // Load items by id (respects user access).
+            var items = new List<BaseItem>();
+            foreach (var id in rankedItems)
+            {
+                var item = _libraryManager.GetItemById<BaseItem>(id, userId);
+                if (item is not null)
                 {
-                    if (!string.IsNullOrEmpty(v))
-                    {
-                        list.Add(v);
-                    }
+                    items.Add(item);
                 }
             }
 
-            // When filtering by ids, scope from user root and recurse so all matched items are returned.
-            dict["recursive"] = new List<string> { "true" };
-
-            // Jellyfin Items API expects ids as a single comma-separated value (CommaDelimitedCollectionModelBinder).
-            var idsValue = string.Join(
-                ",",
-                rankedItems.Select(id => id.ToString("N", System.Globalization.CultureInfo.InvariantCulture)));
-            dict["ids"] = new List<string> { idsValue };
-
-            var parts = new List<string>();
-            foreach (var kvp in dict)
+            if (items.Count == 0)
             {
-                foreach (var v in kvp.Value)
-                {
-                    parts.Add($"{Uri.EscapeDataString(kvp.Key)}={Uri.EscapeDataString(v)}");
-                }
+                _logger.LogDebug("[SearchChapters] No items accessible for user, passing through");
+                await next().ConfigureAwait(false);
+                return;
             }
 
-            var newQueryString = "?" + string.Join("&", parts);
-            request.QueryString = new QueryString(newQueryString);
+            var startIndex = 0;
+            var startIndexStr = query["startIndex"].ToString();
+            if (!string.IsNullOrWhiteSpace(startIndexStr) && int.TryParse(startIndexStr, out var si))
+            {
+                startIndex = Math.Max(0, si);
+            }
 
-            // Force the parsed Query collection to match our new query string so the action's model binder
-            // sees our ids (Request.Query is cached and would otherwise still show the old searchTerm).
-            var queryWithoutQuestionMark = string.Join("&", parts);
-            var parsed = QueryHelpers.ParseQuery(queryWithoutQuestionMark);
-            request.Query = new QueryCollection(parsed);
+            var dtoOptions = new DtoOptions();
+            var dtos = _dtoService.GetBaseItemDtos(items, dtoOptions, user);
+            var totalCount = items.Count;
+            var result = new QueryResult<BaseItemDto>(startIndex, totalCount, dtos);
+            context.Result = new OkObjectResult(result);
+            _logger.LogDebug("[SearchChapters] Returning {Count} items directly", items.Count);
+            return;
         }
         catch (Exception ex)
         {
