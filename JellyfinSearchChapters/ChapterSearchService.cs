@@ -5,6 +5,7 @@ using Jellyfin.Data.Enums;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Library;
 using MediaBrowser.Model.Entities;
+using MediaBrowser.Model.Querying;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging;
 
@@ -60,12 +61,13 @@ public class ChapterSearchService : ControllerBase
 
         // 1. Regular item search (Jellyfin's own search), merged into same result type.
         var itemMatches = _libraryManager
-            .GetItemList(new InternalItemsQuery
+            .GetItemsResult(new InternalItemsQuery
             {
                 SearchTerm = query,
                 IncludeItemTypes = new[] { BaseItemKind.Video },
                 IsVirtualItem = false
             })
+            .Items
             .OfType<Video>()
             .ToList();
 
@@ -96,11 +98,12 @@ public class ChapterSearchService : ControllerBase
         }
 
         var videos = _libraryManager
-            .GetItemList(new InternalItemsQuery
+            .GetItemsResult(new InternalItemsQuery
             {
                 IncludeItemTypes = new[] { BaseItemKind.Video },
                 IsVirtualItem = false
             })
+            .Items
             .OfType<Video>()
             .ToList();
 

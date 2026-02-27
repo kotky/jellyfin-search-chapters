@@ -8,6 +8,7 @@ using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Library;
 using MediaBrowser.Controller.Plugins;
 using MediaBrowser.Model.Entities;
+using MediaBrowser.Model.Querying;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Filters;
@@ -149,12 +150,13 @@ public sealed class ItemsSearchInterceptor : IAsyncActionFilter
 
         // 1. Regular items search via InternalItemsQuery (Videos only).
         var itemMatches = _libraryManager
-            .GetItemList(new InternalItemsQuery
+            .GetItemsResult(new InternalItemsQuery
             {
                 SearchTerm = query,
                 IncludeItemTypes = new[] { BaseItemKind.Video },
                 IsVirtualItem = false
             })
+            .Items
             .OfType<Video>()
             .ToList();
 
@@ -178,11 +180,12 @@ public sealed class ItemsSearchInterceptor : IAsyncActionFilter
 
         // 2. Chapter-based search: rank videos by best matching chapter.
         var videos = _libraryManager
-            .GetItemList(new InternalItemsQuery
+            .GetItemsResult(new InternalItemsQuery
             {
                 IncludeItemTypes = new[] { BaseItemKind.Video },
                 IsVirtualItem = false
             })
+            .Items
             .OfType<Video>()
             .ToList();
 
