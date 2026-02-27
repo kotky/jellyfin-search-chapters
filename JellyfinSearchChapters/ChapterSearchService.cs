@@ -43,14 +43,19 @@ public class ChapterSearchService : ControllerBase
     [HttpGet]
     public ActionResult<List<ChapterSearchResult>> Get([FromQuery] string query)
     {
+        _logger.LogInformation("[SearchChapters] GET /Plugins/SearchChapters called with query: \"{Query}\"", query ?? "(null)");
+
         if (string.IsNullOrWhiteSpace(query))
         {
+            _logger.LogInformation("[SearchChapters] Empty query, returning no results");
             return Ok(new List<ChapterSearchResult>());
         }
 
         var queryNorm = Normalize(query);
         var config = Plugin.Instance?.Configuration;
         var enableFuzzy = config?.EnableFuzzySearch ?? true;
+        _logger.LogInformation("[SearchChapters] Config: EnableFuzzySearch={EnableFuzzy}", enableFuzzy);
+
         var results = new List<ChapterSearchResult>();
 
         // 1. Regular item search (Jellyfin's own search), merged into same result type.
@@ -63,6 +68,8 @@ public class ChapterSearchService : ControllerBase
             })
             .OfType<Video>()
             .ToList();
+
+        _logger.LogInformation("[SearchChapters] Item search (SearchTerm=\"{Query}\") returned {Count} videos", query, itemMatches.Count);
 
         foreach (var video in itemMatches)
         {
@@ -97,6 +104,11 @@ public class ChapterSearchService : ControllerBase
             .OfType<Video>()
             .ToList();
 
+        _logger.LogInformation("[SearchChapters] Scanning chapters across {VideoCount} total videos", videos.Count);
+
+        var videosWithChapters = 0;
+        var chapterHits = 0;
+
         foreach (var video in videos)
         {
             List<ChapterInfo> chapters;
@@ -107,7 +119,7 @@ public class ChapterSearchService : ControllerBase
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Failed to get chapters for item {ItemId}", video.Id);
+                _logger.LogError(ex, "[SearchChapters] Failed to get chapters for item {ItemId} ({ItemName})", video.Id, video.Name);
                 continue;
             }
 
@@ -115,6 +127,8 @@ public class ChapterSearchService : ControllerBase
             {
                 continue;
             }
+
+            videosWithChapters++;
 
             for (var i = 0; i < chapters.Count; i++)
             {
@@ -144,6 +158,7 @@ public class ChapterSearchService : ControllerBase
                     continue;
                 }
 
+                chapterHits++;
                 results.Add(new ChapterSearchResult
                 {
                     ItemId = video.Id,
@@ -155,6 +170,13 @@ public class ChapterSearchService : ControllerBase
                 });
             }
         }
+
+        _logger.LogInformation(
+            "[SearchChapters] Done. Videos with chapters: {VideosWithChapters}, chapter matches: {ChapterHits}, item matches: {ItemMatches}, total results: {Total}",
+            videosWithChapters,
+            chapterHits,
+            results.Count(r => r.ChapterIndex < 0),
+            results.Count);
 
         return Ok(results
             .OrderByDescending(r => r.Score)

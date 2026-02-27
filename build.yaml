@@ -1,7 +1,7 @@
 ---
 name: "Search Chapters"
 guid: "2d7f6b33-0e5f-4fba-a6b0-3de94a541234"
-version: "1.0.0.0"
+version: "1.0.1.0"
 targetAbi: "10.9.11.0"
 framework: "net9.0"
 overview: "Searches items and MP4 chapters, with fuzzy matching."
@@ -9,8 +9,8 @@ description: >
   Provides a search endpoint that combines Jellyfin's regular item search
   with fuzzy matching over embedded MP4 chapter names.
 category: "General"
-owner: "your-name-or-handle"
+owner: "kotky"
 artifacts:
 - "JellyfinSearchChapters.dll"
 changelog: >
-  changelog
+  New release build (unsigned) for Jellyfin plugin compatibility.

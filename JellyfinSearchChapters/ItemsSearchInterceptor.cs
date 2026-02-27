@@ -44,10 +44,16 @@ public sealed class ItemsSearchInterceptor : IAsyncActionFilter
     public async Task OnActionExecutionAsync(ActionExecutingContext context, ActionExecutionDelegate next)
     {
         var request = context.HttpContext.Request;
+        var path = request.Path.Value ?? string.Empty;
 
-        // Only intercept GET /Items
-        if (!HttpMethods.IsGet(request.Method)
-            || !string.Equals(request.Path.Value, "/Items", StringComparison.OrdinalIgnoreCase))
+        // Only intercept GET /Items (path can be "/Items" or "/api/Items" etc.)
+        if (!HttpMethods.IsGet(request.Method))
+        {
+            await next().ConfigureAwait(false);
+            return;
+        }
+
+        if (!path.TrimEnd('/').EndsWith("Items", StringComparison.OrdinalIgnoreCase))
         {
             await next().ConfigureAwait(false);
             return;
@@ -58,6 +64,7 @@ public sealed class ItemsSearchInterceptor : IAsyncActionFilter
 
         if (string.IsNullOrWhiteSpace(searchTerm))
         {
+            _logger.LogDebug("[SearchChapters] /Items path matched but no searchTerm, passing through. Path=\"{Path}\"", path);
             await next().ConfigureAwait(false);
             return;
         }
@@ -65,6 +72,7 @@ public sealed class ItemsSearchInterceptor : IAsyncActionFilter
         // Do not override explicit ids queries
         if (query.ContainsKey("ids"))
         {
+            _logger.LogDebug("[SearchChapters] /Items has ids param, skipping intercept");
             await next().ConfigureAwait(false);
             return;
         }
@@ -72,15 +80,20 @@ public sealed class ItemsSearchInterceptor : IAsyncActionFilter
         var config = Plugin.Instance?.Configuration;
         var enableFuzzy = config?.EnableFuzzySearch ?? true;
 
+        _logger.LogInformation("[SearchChapters] Intercepting /Items searchTerm=\"{SearchTerm}\" EnableFuzzy={EnableFuzzy}", searchTerm, enableFuzzy);
+
         try
         {
             var rankedItems = SearchItemsAndChapters(searchTerm, enableFuzzy);
 
             if (rankedItems.Count == 0)
             {
+                _logger.LogInformation("[SearchChapters] No ranked items for \"{SearchTerm}\", passing through to default search", searchTerm);
                 await next().ConfigureAwait(false);
                 return;
             }
+
+            _logger.LogInformation("[SearchChapters] Rewriting /Items query with {Count} ranked item ids", rankedItems.Count);
 
             // Rewrite query: remove searchTerm, inject ids with ranked item ids.
             var dict = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
@@ -123,7 +136,7 @@ public sealed class ItemsSearchInterceptor : IAsyncActionFilter
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error applying SearchChapters interceptor to /Items request");
+            _logger.LogError(ex, "[SearchChapters] Error applying interceptor to /Items request");
         }
 
         await next().ConfigureAwait(false);
@@ -144,6 +157,8 @@ public sealed class ItemsSearchInterceptor : IAsyncActionFilter
             })
             .OfType<Video>()
             .ToList();
+
+        _logger.LogDebug("[SearchChapters] SearchItemsAndChapters: item search returned {Count} videos", itemMatches.Count);
 
         foreach (var video in itemMatches)
         {
@@ -171,6 +186,10 @@ public sealed class ItemsSearchInterceptor : IAsyncActionFilter
             .OfType<Video>()
             .ToList();
 
+        _logger.LogDebug("[SearchChapters] SearchItemsAndChapters: scanning chapters in {VideoCount} videos", videos.Count);
+
+        var videosWithChapters = 0;
+
         foreach (var video in videos)
         {
             List<ChapterInfo> chapters;
@@ -181,7 +200,7 @@ public sealed class ItemsSearchInterceptor : IAsyncActionFilter
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Failed to get chapters for item {ItemId}", video.Id);
+                _logger.LogError(ex, "[SearchChapters] Failed to get chapters for item {ItemId} ({ItemName})", video.Id, video.Name);
                 continue;
             }
 
@@ -189,6 +208,8 @@ public sealed class ItemsSearchInterceptor : IAsyncActionFilter
             {
                 continue;
             }
+
+            videosWithChapters++;
 
             for (var i = 0; i < chapters.Count; i++)
             {
@@ -221,6 +242,8 @@ public sealed class ItemsSearchInterceptor : IAsyncActionFilter
                 UpdateBestScore(scoresByItem, video.Id, score);
             }
         }
+
+        _logger.LogDebug("[SearchChapters] SearchItemsAndChapters: {VideosWithChapters} videos had chapters, {RankedCount} ranked items", videosWithChapters, scoresByItem.Count);
 
         return scoresByItem
             .OrderByDescending(kvp => kvp.Value)
