@@ -121,9 +121,11 @@ public sealed class ItemsSearchInterceptor : IAsyncActionFilter
                 }
             }
 
-            dict["ids"] = rankedItems
-                .Select(id => id.ToString("N", System.Globalization.CultureInfo.InvariantCulture))
-                .ToList();
+            // Jellyfin Items API expects ids as a single comma-separated value (CommaDelimitedCollectionModelBinder).
+            var idsValue = string.Join(
+                ",",
+                rankedItems.Select(id => id.ToString("N", System.Globalization.CultureInfo.InvariantCulture)));
+            dict["ids"] = new List<string> { idsValue };
 
             var parts = new List<string>();
             foreach (var kvp in dict)
