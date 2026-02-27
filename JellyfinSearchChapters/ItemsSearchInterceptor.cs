@@ -16,6 +16,7 @@ using Microsoft.AspNetCore.Mvc.Filters;
 using Microsoft.AspNetCore.WebUtilities;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Primitives;
 
 namespace Jellyfin.Plugin.SearchChapters;
 
@@ -136,7 +137,14 @@ public sealed class ItemsSearchInterceptor : IAsyncActionFilter
                 }
             }
 
-            request.QueryString = new QueryString("?" + string.Join("&", parts));
+            var newQueryString = "?" + string.Join("&", parts);
+            request.QueryString = new QueryString(newQueryString);
+
+            // Force the parsed Query collection to match our new query string so the action's model binder
+            // sees our ids (Request.Query is cached and would otherwise still show the old searchTerm).
+            var queryWithoutQuestionMark = string.Join("&", parts);
+            var parsed = QueryHelpers.ParseQuery(queryWithoutQuestionMark);
+            request.Query = new QueryCollection(parsed);
         }
         catch (Exception ex)
         {

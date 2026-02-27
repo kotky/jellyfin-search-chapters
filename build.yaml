@@ -1,7 +1,7 @@
 ---
 name: "Search Chapters"
 guid: "2d7f6b33-0e5f-4fba-a6b0-3de94a541234"
-version: "1.0.4.0"
+version: "1.0.5.0"
 targetAbi: "10.9.11.0"
 framework: "net9.0"
 overview: "Searches items and MP4 chapters, with fuzzy matching."
@@ -13,4 +13,4 @@ owner: "kotky"
 artifacts:
 - "JellyfinSearchChapters.dll"
 changelog: >
-  Fix search results: pass ids as comma-separated for /Items API.
+  Fix search results: set Request.Query so model binder sees rewritten ids.
