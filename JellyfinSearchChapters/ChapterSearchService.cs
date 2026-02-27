@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reflection;
 using Jellyfin.Data.Enums;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Library;
@@ -114,11 +115,11 @@ public class ChapterSearchService : ControllerBase
 
         foreach (var video in videos)
         {
-            List<ChapterInfo> chapters;
+            List<ChapterInfo>? chapters;
 
             try
             {
-                chapters = BaseItem.ItemRepository.GetChapters(video);
+                chapters = GetChaptersForVideo(video.Id);
             }
             catch (Exception ex)
             {
@@ -186,6 +187,43 @@ public class ChapterSearchService : ControllerBase
             .ThenBy(r => r.ItemName)
             .ThenBy(r => r.ChapterIndex)
             .ToList());
+    }
+
+    /// <summary>
+    /// Gets chapters for a video via BaseItem.ChapterManager (Jellyfin 10.11+) or reflection fallback.
+    /// </summary>
+    private static List<ChapterInfo>? GetChaptersForVideo(Guid itemId)
+    {
+        try
+        {
+            var baseItemType = typeof(BaseItem);
+            var prop = baseItemType.GetProperty("ChapterManager", BindingFlags.Public | BindingFlags.Static);
+            if (prop?.GetValue(null) is not object chapterManager)
+            {
+                return null;
+            }
+
+            var method = chapterManager.GetType().GetMethod("GetChapters", new[] { typeof(Guid) });
+            if (method?.Invoke(chapterManager, new object[] { itemId }) is not System.Collections.IEnumerable enumerable)
+            {
+                return null;
+            }
+
+            var list = new List<ChapterInfo>();
+            foreach (var item in enumerable)
+            {
+                if (item is ChapterInfo info)
+                {
+                    list.Add(info);
+                }
+            }
+
+            return list;
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     private static string Normalize(string value)
