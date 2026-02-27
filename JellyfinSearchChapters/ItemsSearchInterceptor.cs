@@ -98,11 +98,13 @@ public sealed class ItemsSearchInterceptor : IAsyncActionFilter
 
             _logger.LogInformation("[SearchChapters] Rewriting /Items query with {Count} ranked item ids", rankedItems.Count);
 
-            // Rewrite query: remove searchTerm, inject ids with ranked item ids.
+            // Rewrite query: remove searchTerm, drop parentId so results are not scoped to one folder,
+            // add recursive=true, and inject ids with ranked item ids.
             var dict = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
             foreach (var kvp in query)
             {
-                if (string.Equals(kvp.Key, "searchTerm", StringComparison.OrdinalIgnoreCase))
+                if (string.Equals(kvp.Key, "searchTerm", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(kvp.Key, "parentId", StringComparison.OrdinalIgnoreCase))
                 {
                     continue;
                 }
@@ -121,6 +123,9 @@ public sealed class ItemsSearchInterceptor : IAsyncActionFilter
                     }
                 }
             }
+
+            // When filtering by ids, scope from user root and recurse so all matched items are returned.
+            dict["recursive"] = new List<string> { "true" };
 
             // Jellyfin Items API expects ids as a single comma-separated value (CommaDelimitedCollectionModelBinder).
             var idsValue = string.Join(
