@@ -126,14 +126,16 @@ public sealed class ItemsSearchInterceptor : IAsyncActionFilter
                 return;
             }
 
-            // Load items by id (respects user access).
+            // Load items by id (respects user access), preserving order and chapter names for display.
             var items = new List<BaseItem>();
-            foreach (var id in rankedItems)
+            var chapterNamesForItems = new List<IReadOnlyList<string>>();
+            foreach (var (id, chapterNames) in rankedItems)
             {
                 var item = _libraryManager.GetItemById<BaseItem>(id, userId);
                 if (item is not null)
                 {
                     items.Add(item);
+                    chapterNamesForItems.Add(chapterNames);
                 }
             }
 
@@ -153,6 +155,32 @@ public sealed class ItemsSearchInterceptor : IAsyncActionFilter
 
             var dtoOptions = new DtoOptions();
             var dtos = _dtoService.GetBaseItemDtos(items, dtoOptions, user);
+
+            // Add all matching chapter names to each result so they show in search (e.g. in taglines).
+            for (var i = 0; i < dtos.Count && i < chapterNamesForItems.Count; i++)
+            {
+                var chapterNames = chapterNamesForItems[i];
+                if (chapterNames.Count == 0)
+                {
+                    continue;
+                }
+
+                var dto = dtos[i];
+                var taglines = (dto.Taglines ?? Array.Empty<string>()).ToList();
+                foreach (var name in chapterNames)
+                {
+                    if (!string.IsNullOrWhiteSpace(name))
+                    {
+                        taglines.Add(name);
+                    }
+                }
+
+                if (taglines.Count > 0)
+                {
+                    dto.Taglines = taglines.ToArray();
+                }
+            }
+
             var totalCount = items.Count;
             var result = new QueryResult<BaseItemDto>(startIndex, totalCount, dtos);
             context.Result = new OkObjectResult(result);
@@ -167,10 +195,14 @@ public sealed class ItemsSearchInterceptor : IAsyncActionFilter
         await next().ConfigureAwait(false);
     }
 
-    private List<Guid> SearchItemsAndChapters(string query, bool enableFuzzy)
+    /// <summary>
+    /// Returns ranked item ids with all matching chapter names per item for display in search results.
+    /// </summary>
+    private List<(Guid ItemId, IReadOnlyList<string> ChapterNames)> SearchItemsAndChapters(string query, bool enableFuzzy)
     {
         var queryNorm = Normalize(query);
         var scoresByItem = new Dictionary<Guid, double>();
+        var chapterNamesByItem = new Dictionary<Guid, List<string>>();
 
         // 1. Regular items search via InternalItemsQuery (Videos only).
         var itemMatches = _libraryManager
@@ -202,7 +234,7 @@ public sealed class ItemsSearchInterceptor : IAsyncActionFilter
             UpdateBestScore(scoresByItem, video.Id, itemScore);
         }
 
-        // 2. Chapter-based search: rank videos by best matching chapter.
+        // 2. Chapter-based search: rank videos by best matching chapter and store chapter name for display.
         var videos = _libraryManager
             .GetItemsResult(new InternalItemsQuery
             {
@@ -267,6 +299,16 @@ public sealed class ItemsSearchInterceptor : IAsyncActionFilter
                 }
 
                 UpdateBestScore(scoresByItem, video.Id, score);
+                if (!chapterNamesByItem.TryGetValue(video.Id, out var names))
+                {
+                    names = new List<string>();
+                    chapterNamesByItem[video.Id] = names;
+                }
+
+                if (!names.Contains(chapter.Name))
+                {
+                    names.Add(chapter.Name);
+                }
             }
         }
 
@@ -274,7 +316,7 @@ public sealed class ItemsSearchInterceptor : IAsyncActionFilter
 
         return scoresByItem
             .OrderByDescending(kvp => kvp.Value)
-            .Select(kvp => kvp.Key)
+            .Select(kvp => (kvp.Key, (IReadOnlyList<string>)(chapterNamesByItem.TryGetValue(kvp.Key, out var list) ? list : Array.Empty<string>())))
             .ToList();
     }
 
@@ -315,19 +357,24 @@ public sealed class ItemsSearchInterceptor : IAsyncActionFilter
         }
     }
 
-    private static void UpdateBestScore(Dictionary<Guid, double> scores, Guid id, double score)
+    /// <summary>
+    /// Updates the best score for an item. Returns true if this score was the one stored (new or improved).
+    /// </summary>
+    private static bool UpdateBestScore(Dictionary<Guid, double> scores, Guid id, double score)
     {
         if (scores.TryGetValue(id, out var existing))
         {
             if (score > existing)
             {
                 scores[id] = score;
+                return true;
             }
+
+            return false;
         }
-        else
-        {
-            scores[id] = score;
-        }
+
+        scores[id] = score;
+        return true;
     }
 
     private static string Normalize(string value)
