@@ -156,7 +156,7 @@ public sealed class ItemsSearchInterceptor : IAsyncActionFilter
             var dtoOptions = new DtoOptions();
             var dtos = _dtoService.GetBaseItemDtos(items, dtoOptions, user);
 
-            // Add all matching chapter names to each result so they show in search (e.g. in taglines).
+            // Add all matching chapter names to each result so they show in search (e.g. in taglines / overview).
             for (var i = 0; i < dtos.Count && i < chapterNamesForItems.Count; i++)
             {
                 var chapterNames = chapterNamesForItems[i];
@@ -171,13 +171,28 @@ public sealed class ItemsSearchInterceptor : IAsyncActionFilter
                 {
                     if (!string.IsNullOrWhiteSpace(name))
                     {
-                        taglines.Add(name);
+                        taglines.Add("Chapter: " + name);
                     }
                 }
 
                 if (taglines.Count > 0)
                 {
                     dto.Taglines = taglines.ToArray();
+                }
+
+                // Also surface chapters in the overview text so they are more likely
+                // to be visible in search result UIs that don't render taglines.
+                var chapterSummary = "Chapters: " + string.Join(", ", chapterNames.Where(n => !string.IsNullOrWhiteSpace(n)));
+                if (!string.IsNullOrWhiteSpace(chapterSummary))
+                {
+                    if (string.IsNullOrWhiteSpace(dto.Overview))
+                    {
+                        dto.Overview = chapterSummary;
+                    }
+                    else if (!dto.Overview.Contains(chapterSummary, StringComparison.OrdinalIgnoreCase))
+                    {
+                        dto.Overview = dto.Overview + " | " + chapterSummary;
+                    }
                 }
             }
 
