@@ -156,7 +156,8 @@ public sealed class ItemsSearchInterceptor : IAsyncActionFilter
             var dtoOptions = new DtoOptions();
             var dtos = _dtoService.GetBaseItemDtos(items, dtoOptions, user);
 
-            // Add all matching chapter names to each result so they show in search (e.g. in taglines / overview).
+            // Add all matching chapter names to each result so they show in search
+            // (e.g. in taglines / overview / even the displayed name).
             for (var i = 0; i < dtos.Count && i < chapterNamesForItems.Count; i++)
             {
                 var chapterNames = chapterNamesForItems[i];
@@ -166,6 +167,8 @@ public sealed class ItemsSearchInterceptor : IAsyncActionFilter
                 }
 
                 var dto = dtos[i];
+
+                // 1) Taglines: some clients render these under the title.
                 var taglines = (dto.Taglines ?? Array.Empty<string>()).ToList();
                 foreach (var name in chapterNames)
                 {
@@ -180,8 +183,7 @@ public sealed class ItemsSearchInterceptor : IAsyncActionFilter
                     dto.Taglines = taglines.ToArray();
                 }
 
-                // Also surface chapters in the overview text so they are more likely
-                // to be visible in search result UIs that don't render taglines.
+                // 2) Overview: many clients show this in details / expanded views.
                 var chapterSummary = "Chapters: " + string.Join(", ", chapterNames.Where(n => !string.IsNullOrWhiteSpace(n)));
                 if (!string.IsNullOrWhiteSpace(chapterSummary))
                 {
@@ -192,6 +194,28 @@ public sealed class ItemsSearchInterceptor : IAsyncActionFilter
                     else if (!dto.Overview.Contains(chapterSummary, StringComparison.OrdinalIgnoreCase))
                     {
                         dto.Overview = dto.Overview + " | " + chapterSummary;
+                    }
+                }
+
+                // 3) Name: last resort so that even very minimal search result UIs
+                // that only show the item title will still expose the chapter info.
+                // Keep it short: show at most the first 3 matching chapter names.
+                var shortList = chapterNames
+                    .Where(n => !string.IsNullOrWhiteSpace(n))
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .Take(3)
+                    .ToArray();
+
+                if (shortList.Length > 0)
+                {
+                    var nameSuffix = " [" + string.Join(", ", shortList) + "]";
+                    if (string.IsNullOrWhiteSpace(dto.Name))
+                    {
+                        dto.Name = chapterSummary;
+                    }
+                    else if (!dto.Name.Contains(nameSuffix, StringComparison.OrdinalIgnoreCase))
+                    {
+                        dto.Name += nameSuffix;
                     }
                 }
             }
